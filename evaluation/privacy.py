@@ -837,7 +837,7 @@ class PrivacyEvaluator:
         self.logger.info("Training membership classifier...")
         for train_index, test_index in skf.split(X, y):
             X_train_fold, X_test_fold = X[train_index], X[test_index]
-            y_train_fold, y_test_fold = y[train_index], shuffled_y[test_index]
+            y_train_fold, y_test_fold = y[train_index], y[test_index]
 
             # Train classifier
             clf = RandomForestClassifier(n_estimators=100, random_state=42)

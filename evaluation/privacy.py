@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import anonymeter
-    from anonymeter.evaluators import (InferenceEvaluator,
+    from anonymeter.evaluators import (InferenceEvaluator, 
                                        LinkabilityEvaluator,
                                        SinglingOutEvaluator)
     from anonymeter.stats.confidence import EvaluationResults
@@ -828,20 +828,36 @@ class PrivacyEvaluator:
             [np.ones(len(synthetic_features)), np.zeros(len(original_features))]
         )
 
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
+        # Stratified K-Fold helps ensure that imabalances in positive/negative classes don't affect model training; more useful for imbalanced data. 
+        skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=1)
+        roc_aucs = []
+        pr_aucs = []
+    
+        # Split data & train model 
+        self.logger.info("Training membership classifier...")
+        for train_index, test_index in skf.split(X, y):
+            X_train_fold, X_test_fold = X[train_index], X[test_index]
+            y_train_fold, y_test_fold = y[train_index], shuffled_y[test_index]
 
-        # Train classifier
-        self.logger.info("Training membership inference classifier...")
-        clf = RandomForestClassifier(n_estimators=100, random_state=42)
-        clf.fit(X_train, y_train)
+            # Train classifier
+            clf = RandomForestClassifier(n_estimators=100, random_state=42)
+            clf.fit(X_train_fold, y_train_fold)
 
-        # Evaluate
-        y_pred = clf.predict_proba(X_test)[:, 1]
-        auc_score = roc_auc_score(y_test, y_pred)
+            # Evaluate
+            y_pred = clf.predict_proba(X_test_fold)[:, 1]
+            roc_auc = roc_auc_score(y_test_fold, y_pred)
+            roc_aucs.append(roc_auc)
 
+            # PR-AUC values determine how often the model can correctly predict true positives; more useful for imbalanced data. 
+            # Higher PR-AUC values indicate synthetic data is very similar to real data--can help validate roc-auc values. 
+            pr_auc = average_precision_score(y_test_fold, y_pred)
+            pr_aucs.append(pr_auc)
+
+        self.logger.info("ROC-AUC scores for each fold: ", roc_aucs)
+        self.logger.info("PR-AUC scores for each fold: ", pr_aucs)
+        avg_roc_auc = np.mean(roc_aucs)
+        avg_pr_auc = np.mean(pr_aucs)
+        
         # Calculate additional metrics
         synthetic_pred = clf.predict_proba(synthetic_features)[:, 1]
         original_pred = clf.predict_proba(original_features)[:, 1]
@@ -850,14 +866,15 @@ class PrivacyEvaluator:
         orig_confidence = np.mean(original_pred)
 
         self.logger.info(
-            f"Synthetic/real distinguishability - AUC: {auc_score:.3f}, "
+            f"Synthetic/real distinguishability - AUC: {avg_roc_auc:.3f}, "
             f"Avg confidence (syn/orig): {syn_confidence:.3f}/{orig_confidence:.3f}"
         )
 
-        fidelity_score = max(0.0, 1.0 - auc_score)
+        fidelity_score = max(0.0, 1.0 - avg_roc_auc)
 
         return {
-            "distinguishability_auc": auc_score,
+            "distinguishability_auc": avg_roc_auc,
+            "average precision": avg_pr_auc, 
             "synthetic_confidence": syn_confidence,
             "original_confidence": orig_confidence,
             "fidelity_score": fidelity_score,
